@@ -34,3 +34,23 @@ def send_record(stream_name, record):
     except (BotoCoreError, ClientError) as e:
         logging.error(f"Failed to send record {record['trip_id']} to {stream_name}: {e}")
         return False
+    
+# --- S3 Fallback Writer ---
+def write_failures_to_s3(failed_records, event_type):
+    if not failed_records:
+        return
+
+    date = datetime.utcnow().strftime("%Y-%m-%d")
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+    key = f"failures/trip-{event_type}/{date}/failures-{timestamp}.json"
+
+    try:
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=json.dumps(failed_records, indent=2),
+            ContentType="application/json"
+        )
+        logging.warning(f"{len(failed_records)} failed records written to s3://{S3_BUCKET}/{key}")
+    except Exception as e:
+        logging.exception(f"Could not write failure log to S3: {e}")
