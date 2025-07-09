@@ -10,3 +10,29 @@ table = dynamodb.Table("Trips")
 
 s3 = boto3.client("s3")
 S3_BUCKET = os.environ.get("S3_BUCKET", "nsp-bolt-trip-analytics")
+
+def lambda_handler(event, context):
+    print("Starting aggregation...")
+
+    # Step 1: Scan all completed trips not yet aggregated
+    response = table.scan(
+        FilterExpression="trip_status = :s AND aggregation_flag = :f",
+        ExpressionAttributeValues={
+            ":s": "completed",
+            ":f": False
+        }
+    )
+
+    items = response.get("Items", [])
+    if not items:
+        print("No completed trips found for aggregation.")
+        return
+
+    # Step 2: Group trips by day_partition
+    groups = defaultdict(list)
+    for item in items:
+        day = item.get("day_partition")
+        if day:
+            groups[day].append(item)
+
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
