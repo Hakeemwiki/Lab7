@@ -88,3 +88,39 @@ def process_trip_start(csv_path, stream_name, sleep_seconds):
 
     write_failures_to_s3(failed_records, "start")
     logging.info(f"Trip Start Results – Success: {success}, Failed: {failed}")
+
+# --- Trip End Processor ---
+def process_trip_end(csv_path, stream_name, sleep_seconds):
+    logging.info(f"Processing trip end events from {csv_path}")
+    success, failed = 0, 0
+    failed_records = []
+
+    try:
+        with open(csv_path, newline='') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                record = {
+                    "trip_id": row["trip_id"],
+                    "dropoff_datetime": row["dropoff_datetime"],
+                    "fare_amount": row["fare_amount"],
+                    "tip_amount": row["tip_amount"],
+                    "trip_distance": row["trip_distance"],
+                    "rate_code": row["rate_code"],
+                    "payment_type": row["payment_type"],
+                    "trip_type": row["trip_type"],
+                    "passenger_count": row["passenger_count"],
+                    "event_type": "end"
+                }
+                if send_record(stream_name, record):
+                    success += 1
+                else:
+                    failed += 1
+                    failed_records.append(record)
+                time.sleep(sleep_seconds)
+    except FileNotFoundError:
+        logging.error(f"Trip end file not found: {csv_path}")
+    except Exception as e:
+        logging.exception(f"Unexpected error while processing trip end events: {e}")
+
+    write_failures_to_s3(failed_records, "end")
+    logging.info(f"Trip End Results – Success: {success}, Failed: {failed}")
