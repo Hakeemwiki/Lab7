@@ -36,3 +36,29 @@ def lambda_handler(event, context):
             groups[day].append(item)
 
     now = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+
+    # Step 3: Aggregate KPIs per day
+    for day, trips in groups.items():
+        fares = [float(trip["fare_amount"]) for trip in trips if "fare_amount" in trip]
+
+        if not fares:
+            continue
+
+        kpi = {
+            "date": day,
+            "total_fare": round(sum(fares), 2),
+            "count_trips": len(fares),
+            "average_fare": round(sum(fares) / len(fares), 2),
+            "max_fare": round(max(fares), 2),
+            "min_fare": round(min(fares), 2),
+        }
+
+        # Step 4: Save JSON to S3
+        key = f"trip-kpis/dt={day}/kpi-{now}.json"
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=json.dumps(kpi),
+            ContentType="application/json"
+        )
+        print(f"Saved KPI for {day} to s3://{S3_BUCKET}/{key}")
