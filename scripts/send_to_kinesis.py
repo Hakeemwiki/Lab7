@@ -124,3 +124,28 @@ def process_trip_end(csv_path, stream_name, sleep_seconds):
 
     write_failures_to_s3(failed_records, "end")
     logging.info(f"Trip End Results – Success: {success}, Failed: {failed}")
+
+
+# --- Argument Parser ---
+def parse_args():
+    parser = argparse.ArgumentParser(description="Send trip events to Kinesis")
+    parser.add_argument('--start', help="Path to trip_start.csv")
+    parser.add_argument('--end', help="Path to trip_end.csv")
+    parser.add_argument('--sleep', type=float, default=DEFAULT_SLEEP, help="Delay between sends (seconds)")
+    return parser.parse_args()
+
+# --- Main ---
+if __name__ == "__main__":
+    args = parse_args()
+
+    if not args.start and not args.end:
+        logging.error("Please provide at least one of --start or --end")
+        exit(1)
+
+    if args.start:
+        process_trip_start(args.start, "trip_start_stream", args.sleep)
+
+    if args.end:
+        process_trip_end(args.end, "trip_end_stream", args.sleep)
+
+    logging.info("Event dispatch complete.")
