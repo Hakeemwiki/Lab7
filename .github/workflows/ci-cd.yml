@@ -1,0 +1,22 @@
+name: Deploy Lambda Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lambdas/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        lambda:
+          - name: process_trip_start
+            path: lambdas/process_trip_start
+          - name: process_trip_end
+            path: lambdas/process_trip_end
+          - name: aggregate_completed_trips
+            path: lambdas/aggregate_completed_trips      
