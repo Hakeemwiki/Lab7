@@ -2,6 +2,7 @@ import boto3
 import csv
 import json
 import time
+import random
 import logging
 import argparse
 import os
@@ -63,87 +64,96 @@ def write_failures_to_s3(failed_records, event_type):
     except Exception as e:
         logging.exception(f"Could not write failure log to S3: {e}")
 
-# --- Send in Batches ---
-def send_records_in_batches(all_records, stream_name):
-    failed_all = []
-    for i in range(0, len(all_records), BATCH_SIZE):
-        batch = all_records[i:i+BATCH_SIZE]
-        failed = send_bulk_records(stream_name, batch)
-        failed_all.extend(failed)
-        time.sleep(DEFAULT_SLEEP)
-    return failed_all
-
-# --- Trip Start Processor ---
-def process_trip_start(csv_path, stream_name):
-    logging.info(f"Processing trip start events from {csv_path}")
-    valid_records = []
-
+# --- Validation Utilities ---
+def is_valid_datetime(value):
     try:
-        with open(csv_path, newline='') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if not row.get("trip_id") or not row.get("pickup_datetime"):
-                    continue  # Simple deduplication/validation
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return True
+    except (ValueError, TypeError):
+        return False
 
-                record = {
-                    "trip_id": row["trip_id"],
-                    "pickup_datetime": row["pickup_datetime"],
-                    "pickup_location_id": row["pickup_location_id"],
-                    "dropoff_location_id": row["dropoff_location_id"],
-                    "vendor_id": row["vendor_id"],
-                    "estimated_dropoff_datetime": row["estimated_dropoff_datetime"],
-                    "estimated_fare_amount": row["estimated_fare_amount"],
-                    "event_type": "start"
-                }
-                valid_records.append(record)
-
-    except FileNotFoundError:
-        logging.error(f"Trip start file not found: {csv_path}")
-        return
-    except Exception as e:
-        logging.exception(f"Unexpected error while reading trip start events: {e}")
-        return
-
-    failed_records = send_records_in_batches(valid_records, stream_name)
-    write_failures_to_s3(failed_records, "start")
-    logging.info(f"Trip Start Results – Success: {len(valid_records) - len(failed_records)}, Failed: {len(failed_records)}")
-
-# --- Trip End Processor ---
-def process_trip_end(csv_path, stream_name):
-    logging.info(f"Processing trip end events from {csv_path}")
-    valid_records = []
-
+def is_valid_float(value):
     try:
-        with open(csv_path, newline='') as f:
+        float(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+# --- Trip Record Loader ---
+def load_trip_csv(path, event_type):
+    logging.info(f"Loading {event_type} records from {path}")
+    try:
+        with open(path, newline='') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                if not row.get("trip_id") or not row.get("dropoff_datetime"):
-                    continue
-
-                record = {
-                    "trip_id": row["trip_id"],
-                    "dropoff_datetime": row["dropoff_datetime"],
-                    "fare_amount": row["fare_amount"],
-                    "tip_amount": row["tip_amount"],
-                    "trip_distance": row["trip_distance"],
-                    "rate_code": row["rate_code"],
-                    "payment_type": row["payment_type"],
-                    "trip_type": row["trip_type"],
-                    "passenger_count": row["passenger_count"],
-                    "event_type": "end"
-                }
-                valid_records.append(record)
-
+            return list(reader)
     except FileNotFoundError:
-        logging.error(f"Trip end file not found: {csv_path}")
-        return
+        logging.error(f"File not found: {path}")
+        return []
     except Exception as e:
-        logging.exception(f"Unexpected error while reading trip end events: {e}")
-        return
+        logging.exception(f"Error loading {event_type} records: {e}")
+        return []
 
-    failed_records = send_records_in_batches(valid_records, stream_name)
-    write_failures_to_s3(failed_records, "end")
-    logging.info(f"Trip End Results – Success: {len(valid_records) - len(failed_records)}, Failed: {len(failed_records)}")
+# --- Mixed Processor ---
+def process_mixed_events(start_path, end_path):
+    logging.info("Processing mixed trip events for interleaved simulation")
+    start_rows = load_trip_csv(start_path, "start")
+    end_rows = load_trip_csv(end_path, "end")
+
+    all_records = []
+
+    for row in start_rows:
+        trip_id = row.get("trip_id")
+        pickup_dt = row.get("pickup_datetime")
+        dropoff_est_dt = row.get("estimated_dropoff_datetime")
+        fare = row.get("estimated_fare_amount")
+
+        if trip_id and is_valid_datetime(pickup_dt) and is_valid_datetime(dropoff_est_dt) and is_valid_float(fare):
+            all_records.append({
+                "trip_id": trip_id,
+                "pickup_datetime": pickup_dt,
+                "pickup_location_id": row["pickup_location_id"],
+                "dropoff_location_id": row["dropoff_location_id"],
+                "vendor_id": row["vendor_id"],
+                "estimated_dropoff_datetime": dropoff_est_dt,
+                "estimated_fare_amount": fare,
+                "event_type": "start",
+                "stream": "trip_start_stream"
+            })
+
+    for row in end_rows:
+        trip_id = row.get("trip_id")
+        dropoff_dt = row.get("dropoff_datetime")
+        fare = row.get("fare_amount")
+
+        if trip_id and is_valid_datetime(dropoff_dt) and is_valid_float(fare):
+            all_records.append({
+                "trip_id": trip_id,
+                "dropoff_datetime": dropoff_dt,
+                "fare_amount": fare,
+                "tip_amount": row["tip_amount"],
+                "trip_distance": row["trip_distance"],
+                "rate_code": row["rate_code"],
+                "payment_type": row["payment_type"],
+                "trip_type": row["trip_type"],
+                "passenger_count": row["passenger_count"],
+                "event_type": "end",
+                "stream": "trip_end_stream"
+            })
+
+    random.shuffle(all_records)
+    logging.info(f"Sending {len(all_records)} shuffled trip events...")
+
+    stream_groups = {"trip_start_stream": [], "trip_end_stream": []}
+    for rec in all_records:
+        stream_groups[rec["stream"]].append(rec)
+
+    for stream_name, records in stream_groups.items():
+        for i in range(0, len(records), BATCH_SIZE):
+            batch = records[i:i+BATCH_SIZE]
+            failed = send_bulk_records(stream_name, batch)
+            event_type = "start" if stream_name == "trip_start_stream" else "end"
+            write_failures_to_s3(failed, event_type)
+            time.sleep(DEFAULT_SLEEP)
 
 # --- Argument Parser ---
 def parse_args():
@@ -151,20 +161,21 @@ def parse_args():
     parser.add_argument('--start', help="Path to trip_start.csv")
     parser.add_argument('--end', help="Path to trip_end.csv")
     parser.add_argument('--sleep', type=float, default=DEFAULT_SLEEP, help="Delay between sends (seconds)")
+    parser.add_argument('--mode', choices=["sequential", "mixed"], default="sequential", help="Sending mode")
     return parser.parse_args()
 
 # --- Main ---
 if __name__ == "__main__":
     args = parse_args()
+    DEFAULT_SLEEP = args.sleep
 
-    if not args.start and not args.end:
-        logging.error("Please provide at least one of --start or --end")
+    if not args.start or not args.end:
+        logging.error("Both --start and --end paths are required for mixed simulation")
         exit(1)
 
-    if args.start:
-        process_trip_start(args.start, "trip_start_stream")
-
-    if args.end:
-        process_trip_end(args.end, "trip_end_stream")
+    if args.mode == "mixed":
+        process_mixed_events(args.start, args.end)
+    else:
+        logging.error("Sequential mode not implemented. Use --mode mixed")
 
     logging.info("Event dispatch complete.")
