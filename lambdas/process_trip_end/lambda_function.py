@@ -1,6 +1,8 @@
 import boto3
 import json
 import logging
+import base64
+from decimal import Decimal
 
 # Setup logging
 logger = logging.getLogger()
@@ -13,7 +15,10 @@ table = dynamodb.Table('Trips')
 def lambda_handler(event, context):
     for record in event['Records']:
         try:
-            payload = json.loads(record['kinesis']['data'])
+            # Decode and parse Kinesis data
+            decoded_data = base64.b64decode(record['kinesis']['data']).decode('utf-8')
+            payload = json.loads(decoded_data)
+
             trip_id = payload.get("trip_id")
             dropoff_datetime = payload.get("dropoff_datetime")
             fare_amount = payload.get("fare_amount")
@@ -22,10 +27,9 @@ def lambda_handler(event, context):
                 logger.warning(f"Incomplete trip end data: {payload}")
                 continue
 
-            # Read current state
+            # Check if pickup exists to determine trip status
             current = table.get_item(Key={'trip_id': trip_id}).get('Item', {})
             pickup_exists = 'pickup_datetime' in current
-
             new_status = 'completed' if pickup_exists else 'ended'
 
             update_expr = """
@@ -37,7 +41,7 @@ def lambda_handler(event, context):
 
             expr_values = {
                 ':dd': dropoff_datetime,
-                ':fa': float(fare_amount),
+                ':fa': Decimal(str(fare_amount)),  # Convert float string to Decimal
                 ':ts': new_status,
                 ':af': False
             }
