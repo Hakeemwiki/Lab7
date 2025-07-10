@@ -1,6 +1,8 @@
 import boto3
 import json
 import logging
+import base64
+from decimal import Decimal
 from datetime import datetime
 
 # Setup logging
@@ -14,7 +16,10 @@ table = dynamodb.Table('Trips')
 def lambda_handler(event, context):
     for record in event['Records']:
         try:
-            payload = json.loads(record['kinesis']['data'])
+            # Decode base64-encoded Kinesis data
+            raw_data = base64.b64decode(record['kinesis']['data']).decode('utf-8')
+            payload = json.loads(raw_data)
+
             trip_id = payload.get("trip_id")
             pickup_datetime = payload.get("pickup_datetime")
 
@@ -22,7 +27,7 @@ def lambda_handler(event, context):
                 logger.warning(f"Missing required fields in event: {payload}")
                 continue
 
-            # Generate day_partition
+            # Generate day_partition (e.g., '2025-07-10')
             day_partition = pickup_datetime.split(" ")[0]
 
             update_expr = """
@@ -35,7 +40,7 @@ def lambda_handler(event, context):
 
             expr_values = {
                 ':pd': pickup_datetime,
-                ':fa': float(payload.get("estimated_fare_amount", 0)),
+                ':fa': Decimal(str(payload.get("estimated_fare_amount", "0"))),  # Use Decimal for DynamoDB
                 ':ts': 'started',
                 ':dp': day_partition,
                 ':af': False
