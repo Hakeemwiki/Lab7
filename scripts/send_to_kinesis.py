@@ -6,54 +6,174 @@ import logging
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 kinesis = boto3.client('kinesis', region_name='eu-north-1')
-S3_BUCKET = 'trip-failure-logs'
-BATCH_SIZE = 500
+S3_BUCKET = 'nsp-bolt-trip-analytics'
+BATCH_SIZE = 20
 
 def is_valid_record(record, event_type):
-    if event_type == 'start':
-        return all(k in record for k in ['trip_id', 'pickup_datetime', 'estimated_fare_amount']) and \
-               datetime.strptime(record['pickup_datetime'], '%Y-%m-%d %H:%M:%S')
-    return all(k in record for k in ['trip_id', 'dropoff_datetime', 'fare_amount']) and \
-           datetime.strptime(record['dropoff_datetime'], '%Y-%m-%d %H:%M:%S')
-
-def send_records(stream_name, records):
+    """Validate record structure based on event type"""
     try:
+        if event_type == 'start':
+            required_fields = ['trip_id', 'pickup_datetime', 'estimated_fare_amount']
+            if not all(k in record for k in required_fields):
+                logger.warning(f"Missing required fields for start event: {record}")
+                return False
+            # Validate datetime format
+            datetime.strptime(record['pickup_datetime'], '%Y-%m-%d %H:%M:%S')
+            # Validate fare amount
+            float(record['estimated_fare_amount'])
+            return True
+        else:  # end event
+            required_fields = ['trip_id', 'dropoff_datetime', 'fare_amount']
+            if not all(k in record for k in required_fields):
+                logger.warning(f"Missing required fields for end event: {record}")
+                return False
+            # Validate datetime format
+            datetime.strptime(record['dropoff_datetime'], '%Y-%m-%d %H:%M:%S')
+            # Validate fare amount
+            float(record['fare_amount'])
+            return True
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Invalid data format in record: {record}, Error: {e}")
+        return False
+
+def send_records(stream_name, records, event_type):
+    """Send records to Kinesis stream with retry logic"""
+    if not records:
+        return []
+    
+    try:
+        # Prepare records for Kinesis
+        kinesis_records = []
+        for rec in records:
+            # Add event_type to each record
+            payload = {'event_type': event_type, **rec}
+            kinesis_records.append({
+                'Data': json.dumps(payload),
+                'PartitionKey': rec['trip_id']
+            })
+        
+        logger.info(f"Sending batch of {len(kinesis_records)} {event_type} records to {stream_name}")
+        
         response = kinesis.put_records(
             StreamName=stream_name,
-            Records=[{'Data': json.dumps({'event_type': event_type, **rec}), 'PartitionKey': rec['trip_id']} for rec in records]
+            Records=kinesis_records
         )
-        failed = [records[i] for i, r in enumerate(response['Records']) if 'ErrorCode' in r]
-        if failed:
-            logging.warning(f"{len(failed)} records failed")
-        return failed
+        
+        # Check for failed records
+        failed_records = []
+        for i, record_result in enumerate(response['Records']):
+            if 'ErrorCode' in record_result:
+                failed_records.append(records[i])
+                logger.error(f"Failed to send record {i}: {record_result['ErrorCode']} - {record_result.get('ErrorMessage', '')}")
+        
+        if failed_records:
+            logger.warning(f"{len(failed_records)} out of {len(records)} records failed to send")
+        else:
+            logger.info(f"Successfully sent all {len(records)} records")
+        
+        return failed_records
+        
     except Exception as e:
-        logging.error(f"Send failed: {e}")
-        return records
+        logger.error(f"Error sending records to Kinesis: {e}")
+        return records  # Return all records as failed
 
 def store_failed_records(failed_records, event_type):
-    if failed_records:
+    """Store failed records to S3 for later retry"""
+    if not failed_records:
+        return
+    
+    try:
         timestamp = datetime.utcnow().strftime('%Y-%m-%d-%H-%M-%S')
         key = f"failed/{event_type}/{timestamp}.json"
-        boto3.client('s3').put_object(Bucket=S3_BUCKET, Key=key, Body=json.dumps(failed_records, indent=2))
-        logging.warning(f"Saved {len(failed_records)} failed records to S3")
+        
+        s3_client = boto3.client('s3')
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=json.dumps(failed_records, indent=2),
+            ContentType='application/json'
+        )
+        
+        logger.warning(f"Saved {len(failed_records)} failed {event_type} records to s3://{S3_BUCKET}/{key}")
+        
+    except Exception as e:
+        logger.error(f"Failed to store failed records to S3: {e}")
 
 def process_file(file_path, event_type, stream_name):
-    records = []
-    with open(file_path, newline='') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if is_valid_record(row, event_type):
-                records.append(row)
+    """Process CSV file and send records to Kinesis"""
+    logger.info(f"Processing file: {file_path} for {event_type} events")
     
-    for i in range(0, len(records), BATCH_SIZE):
-        batch = records[i:i+BATCH_SIZE]
-        failed = send_records(stream_name, batch)
-        store_failed_records(failed, event_type)
-        time.sleep(0.2)
+    try:
+        records = []
+        total_records = 0
+        valid_records = 0
+        
+        with open(file_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            
+            for row_num, row in enumerate(reader, 1):
+                total_records += 1
+                
+                # Clean up the row data
+                cleaned_row = {k.strip(): v.strip() for k, v in row.items() if k and v}
+                
+                if is_valid_record(cleaned_row, event_type):
+                    records.append(cleaned_row)
+                    valid_records += 1
+                else:
+                    logger.warning(f"Invalid record on row {row_num}: {cleaned_row}")
+        
+        logger.info(f"File processed: {total_records} total records, {valid_records} valid records")
+        
+        if not records:
+            logger.warning(f"No valid records found in {file_path}")
+            return
+        
+        # Send records in batches
+        total_failed = 0
+        for i in range(0, len(records), BATCH_SIZE):
+            batch = records[i:i+BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            
+            logger.info(f"Processing batch {batch_num} ({len(batch)} records)")
+            
+            failed = send_records(stream_name, batch, event_type)
+            
+            if failed:
+                total_failed += len(failed)
+                store_failed_records(failed, event_type)
+            
+            # Add delay between batches to avoid throttling
+            if i + BATCH_SIZE < len(records):
+                time.sleep(0.2)
+        
+        logger.info(f"Completed processing {file_path}: {len(records)} processed, {total_failed} failed")
+        
+    except FileNotFoundError:
+        logger.error(f"File not found: {file_path}")
+    except Exception as e:
+        logger.error(f"Error processing file {file_path}: {e}")
+
+def main():
+    """Main function to process both trip start and end files"""
+    logger.info("Starting trip data ingestion process")
+    
+    # Process files
+    files_to_process = [
+        ('data/trip_start.csv', 'start', 'TripEventsStream'),
+        ('data/trip_end.csv', 'end', 'TripEventsStream')
+    ]
+    
+    for file_path, event_type, stream_name in files_to_process:
+        try:
+            process_file(file_path, event_type, stream_name)
+        except Exception as e:
+            logger.error(f"Failed to process {file_path}: {e}")
+    
+    logger.info("Trip data ingestion process completed")
 
 if __name__ == "__main__":
-    process_file('data/trip_start.csv', 'start', 'TripEventsStream')
-    process_file('data/trip_end.csv', 'end', 'TripEventsStream')
-    logging.info("Ingestion completed")
+    main()
