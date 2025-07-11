@@ -26,18 +26,24 @@ def validate_data(payload):
 
 def prepare_record(payload):
     trip_id = payload['trip_id']
-    day_key = payload['pickup_datetime'].split(' ')[0]
+    pickup_datetime = payload['pickup_datetime']
+    day_key = pickup_datetime.split(' ')[0]
     return {
         'trip_id': trip_id,
-        'sort_key': f"START#{payload['pickup_datetime']}",
+        'sort_key': f"RAW#START#{pickup_datetime}",
         'event_type': 'start',
         'day_partition': day_key,
-        'pickup_datetime': payload['pickup_datetime'],
+        'pickup_datetime': pickup_datetime,
         'estimated_fare': Decimal(str(payload['estimated_fare_amount'])),
-        'status': 'pending'
+        'status': 'pending',
+        'created_at': datetime.utcnow().isoformat()
     }
 
 def lambda_handler(event, context):
+    if 'Records' not in event:
+        logger.error(f"Invalid event structure: {event}")
+        return {'statusCode': 400, 'body': 'Missing Records in event'}
+
     items = []
     for record in event['Records']:
         try:
@@ -48,14 +54,8 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"Error processing record: {e}")
 
-    unique_items = {}
-    for item in items:
-        key = f"{item['trip_id']}#{item['sort_key']}"
-        if key not in unique_items:
-            unique_items[key] = item
-
     with table.batch_writer() as writer:
-        for item in unique_items.values():
+        for item in items:
             writer.put_item(Item=item)
-    logger.info(f"Processed {len(unique_items)} start events")
+    logger.info(f"Processed {len(items)} start events")
     return {'statusCode': 200, 'body': 'Start events ingested'}
