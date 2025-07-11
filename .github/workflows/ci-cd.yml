@@ -1,4 +1,5 @@
-name: Deploy Lambda Functions
+
+name: Deploy Lambda Functions and Glue Job
 
 on:
   push:
@@ -46,6 +47,27 @@ jobs:
           --function-name ${{ matrix.lambda.name }} \
           --zip-file fileb://${{ matrix.lambda.name }}.zip \
           --region ${{ secrets.AWS_REGION }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    - name: Upload Glue script to S3
+      run: |
+        aws s3 cp scripts/GenerateTripMetrics.py s3://nsp-bolt-trip-analytics/scripts/GenerateTripMetrics.py \
+          --region ${{ secrets.AWS_REGION }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+
+    - name: Update Glue Job
+      run: |
+        aws glue update-job \
+          --job-name GenerateTripMetrics \
+          --role-name GlueTripRole \
+          --region ${{ secrets.AWS_REGION }} \
+          --command '{"Name": "pythonshell", "ScriptLocation": "s3://nsp-bolt-trip-analytics/scripts/compute_daily_metrics.py", "PythonVersion": "3"}'
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
