@@ -60,7 +60,7 @@ jobs:
 
     - name: Upload Glue script to S3
       run: |
-        aws s3 cp scripts/compute_daily_metrics.py s3://nsp-bolt-trip-analytics/scripts/compute_daily_metrics.py \
+        aws s3 cp scripts/GenerateTripMetrics.py s3://nsp-bolt-trip-analytics/scripts/GenerateTripMetrics.py \
           --region ${{ secrets.AWS_REGION }}
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
