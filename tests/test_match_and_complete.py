@@ -1,20 +1,20 @@
 import unittest
 import json
 from unittest.mock import Mock, patch
-from trip_handlers.match_and_complete import lambda_handler, find_counterpart, create_completed_record
+from trip_handlers.match_and_complete.match_and_complete import lambda_handler, find_counterpart, create_completed_record
 
 class TestMatchAndComplete(unittest.TestCase):
     def setUp(self):
         self.start_item = {
             "trip_id": {"S": "trip_001"},
-            "sort_key": {"S": "START#2025-07-11 11:47:00"},
-            "pickup_datetime": {"S": "2025-07-11 11:47:00"},
+            "sort_key": {"S": "START#2025-07-12 00:03:00"},
+            "pickup_datetime": {"S": "2025-07-12 00:03:00"},
             "estimated_fare": {"N": "10.00"}
         }
         self.end_item = {
             "trip_id": {"S": "trip_001"},
-            "sort_key": {"S": "END#2025-07-11 11:48:00"},
-            "dropoff_datetime": {"S": "2025-07-11 11:48:00"},
+            "sort_key": {"S": "END#2025-07-12 00:04:00"},
+            "dropoff_datetime": {"S": "2025-07-12 00:04:00"},
             "fare_amount": {"N": "10.00"}
         }
         self.event = {

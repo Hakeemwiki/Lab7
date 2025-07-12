@@ -1,13 +1,13 @@
 import unittest
 import json
 from unittest.mock import Mock, patch
-from trip_handlers.process_trip_begin import lambda_handler, validate_data, prepare_record
+from trip_handlers.process_trip_begin.process_trip_begin import lambda_handler, validate_data, prepare_record
 
 class TestProcessTripBegin(unittest.TestCase):
     def setUp(self):
         self.valid_payload = {
             "trip_id": "trip_001",
-            "pickup_datetime": "2025-07-11 11:47:00",
+            "pickup_datetime": "2025-07-12 00:03:00",
             "estimated_fare_amount": "10.00"
         }
         self.event = {
