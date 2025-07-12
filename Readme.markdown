@@ -34,12 +34,12 @@
 - [Performance Considerations](#performance-considerations)
 - [Security and Compliance](#security-and-compliance)
 - [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
 - [Guide for Recreating the Project](#guide-for-recreating-the-project)
   - [Setup Instructions](#setup-instructions)
   - [Configuration Details](#configuration-details)
   - [Verification Steps](#verification-steps)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Overview
 This project implements a real-time, event-driven data pipeline to process trip data from a ride-sharing platform. The pipeline ingests trip start and end events via Amazon Kinesis, processes them using AWS Lambda functions, aggregates completed trips in Amazon DynamoDB, and generates daily Key Performance Indicators (KPIs) using an AWS Glue job. The resulting KPIs are stored in Amazon S3 for analysis and reporting. The solution leverages automated deployment via GitHub Actions, includes comprehensive testing, and integrates logging and error handling with Amazon CloudWatch.
@@ -53,8 +53,9 @@ The ride-sharing platform faces the challenge of efficiently processing and anal
 
 Manual data processing is impractical due to its time-intensive nature and susceptibility to errors, delaying critical insights. This pipeline automates ingestion, processing, and KPI generation, enabling real-time monitoring, historical analysis, and data-driven decision-making.
 
-**[INSERT IMAGE: Architecture Diagram]**  
-*(Placeholder for a diagram illustrating the Kinesis -> Lambda -> DynamoDB -> Glue -> S3 flow, e.g., created with Draw.io.)*
+**[Architecture Diagram]**  
+
+![alt text](docs/lab7.drawio.svg)
 
 ## Architecture
 ### Components
@@ -78,14 +79,14 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
 - **Files**: CSV files `trip_start.csv` and `trip_end.csv` in a local `data/` directory.
 - **Sample Schema**:
   - `trip_start.csv`: `trip_id, pickup_datetime, estimated_fare_amount`
-    - Example: `trip_001, 2025-07-12 04:30:00, 10.00`
+    - Example: `trip_001, 2025-07-12 04:38:00, 10.00`
   - `trip_end.csv`: `trip_id, dropoff_datetime, fare_amount`
-    - Example: `trip_001, 2025-07-12 04:45:00, 10.50`
+    - Example: `trip_001, 2025-07-12 04:53:00, 10.50`
 
 ### Intermediate Data
 - **TripData Table**:
   - `trip_id` (String): Unique trip identifier.
-  - `sort_key` (String): e.g., `RAW#START#2025-07-12 04:30:00`, `RAW#END#2025-07-12 04:45:00`, or `COMPLETED#2025-07-12T04:32:00`.
+  - `sort_key` (String): e.g., `RAW#START#2025-07-12 04:38:00`, `RAW#END#2025-07-12 04:53:00`, or `COMPLETED#2025-07-12T04:38:00`.
   - `event_type` (String): `start`, `end`, or `completed`.
   - `pickup_datetime`/`dropoff_datetime` (String): Trip timestamps.
   - `estimated_fare`/`fare_amount` (Decimal): Fare values.
@@ -100,8 +101,8 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
   - `max_fare` (Number): Highest fare.
   - `min_fare` (Number): Lowest fare.
 
-**[INSERT IMAGE: KPI Sample Output]**  
-*(Placeholder for a screenshot or table of a sample CSV output, e.g., `2025-07-12-04-32-00-daily_trip_kpis.csv`.)*
+**[KPI Sample Output]**  
+![alt text](docs/Athena.png)
 
 ## Validation Rules
 - **Malformed Data**: Reject records missing required fields (`trip_id`, `pickup_datetime`, `estimated_fare_amount` for start; `trip_id`, `dropoff_datetime`, `fare_amount` for end).
@@ -115,6 +116,23 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
   - **Access Pattern**: Query by `trip_id` and `sort_key` prefix (`RAW#START#`, `RAW#END#`, `COMPLETED#`) to match and aggregate trips.
   - **Attributes**: `event_type`, `pickup_datetime`, `dropoff_datetime`, `estimated_fare`, `fare_amount`, `trip_status`.
 
+## Ad-Hoc Querying with Athena
+To enable flexible analysis of KPIs, AWS Glue crawlers have been configured to crawl the KPI data stored in `s3://nsp-bolt-trip-analytics/metrics/`. This creates a table in the AWS Glue Data Catalog, allowing ad-hoc querying using Amazon Athena. The crawler runs after each Glue job execution to update the schema and partition metadata.
+
+- **Crawler Configuration**:
+  - **Database**: `trip_kpis_db`
+  - **Table Name**: `daily_trip_kpis`
+  - **S3 Path**: `s3://nsp-bolt-trip-analytics/metrics/`
+  - **Schedule**: Triggered manually or post-Glue job (configurable via EventBridge).
+- **Athena Query Example**:
+  ```sql
+  SELECT pickup_date, total_fare, average_fare
+  FROM trip_kpis_db.daily_trip_kpis
+  WHERE pickup_date = '2025-07-12'
+  ORDER BY total_fare DESC;
+
+
+
 ## Pipeline Workflow Explanation
 ### Ingestion Phase
 - `send_to_kinesis.py` reads `trip_start.csv` and `trip_end.csv`, validates records, and sends batches to `TripEventsStream`.
@@ -127,6 +145,7 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
 ### Aggregation Phase
 - `GenerateTripMetrics` Glue job scans `COMPLETED#` records, computes KPIs, and uploads to S3.
 - EventBridge schedules the job daily at 1:00 AM GMT.
+![alt text](docs/EventBridgeScheduler.png)
 
 **[INSERT IMAGE: Workflow Diagram]**  
 *(Placeholder for a flowchart detailing ingestion, processing, and aggregation phases.)*
@@ -156,8 +175,8 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
 ### End-to-End Testing
 1. **Prepare Test Data**:
    - Create `data/trip_start.csv` and `data/trip_end.csv`:
-     - `trip_start.csv`: `trip_001,2025-07-12 04:30:00,10.00`
-     - `trip_end.csv`: `trip_001,2025-07-12 04:45:00,10.50`
+     - `trip_start.csv`: `trip_001,2025-07-12 04:38:00,10.00`
+     - `trip_end.csv`: `trip_001,2025-07-12 04:53:00,10.50`
 2. **Run Ingestion**:
    - Execute `python send_to_kinesis.py`.
 3. **Verify Lambda Processing**:
@@ -208,30 +227,53 @@ Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, process
 - **Lambda Errors**: Review CloudWatch for `InvalidOperation` (e.g., invalid `Decimal`); adjust `validate_data`.
 - **Glue Job Failures**: Verify `TripData` has `COMPLETED#` records; check `NoRegionError` by setting `AWS_DEFAULT_REGION`.
 
-## Contributing
-Suggest enhancements (e.g., a dashboard, retry queue). Submit issues or pull requests with detailed descriptions.
-
-## License
-[MIT License](LICENSE) - Modify and distribute freely.
-
 ## Guide for Recreating the Project
 ### Setup Instructions
 1. **Set Up S3 Bucket**:
-   - `aws s3 mb s3://nsp-bolt-trip-analytics --region eu-north-1`.
-   - `aws s3api put-bucket-versioning --bucket nsp-bolt-trip-analytics --versioning-configuration Status=Enabled`.
+   - Create a bucket: `aws s3 mb s3://nsp-bolt-trip-analytics --region eu-north-1`.
+   - Enable versioning: `aws s3api put-bucket-versioning --bucket nsp-bolt-trip-analytics --versioning-configuration Status=Enabled`.
 
 2. **Create DynamoDB Table**:
-   - `aws dynamodb create-table --table-name TripData ...` (see below).
+   - `aws dynamodb create-table \
+     --table-name TripData \
+     --attribute-definitions AttributeName=trip_id,AttributeType=S AttributeName=sort_key,AttributeType=S \
+     --key-schema AttributeName=trip_id,KeyType=HASH AttributeName=sort_key,KeyType=RANGE \
+     --billing-mode PAY_PER_REQUEST \
+     --region eu-north-1`
 
 3. **Set Up Kinesis Stream**:
    - `aws kinesis create-stream --stream-name TripEventsStream --shard-count 1 --region eu-north-1`.
 
+4. **Create IAM Roles**:
+   - **LambdaExecutionRole**: Allows `lambda:InvokeFunction`, `kinesis:*`, `dynamodb:*`.
+   - **GlueTripRole**: Allows `glue:*`, `s3:*`, `dynamodb:*`.
+   - Example: `aws iam create-role --role-name LambdaExecutionRole --assume-role-policy-document file://trust-policy.json`.
+
 ### Configuration Details
-- **DynamoDB Table**:
-  ```bash
-  aws dynamodb create-table \
-    --table-name TripData \
-    --attribute-definitions AttributeName=trip_id,AttributeType=S AttributeName=sort_key,AttributeType=S \
-    --key-schema AttributeName=trip_id,KeyType=HASH AttributeName=sort_key,KeyType=RANGE \
-    --billing-mode PAY_PER_REQUEST \
-    --region eu-north-1
+- **Lambda Deployment**:
+  - Package `process_trip_begin.py`: `zip process_trip_begin.zip process_trip_begin.py`.
+  - Deploy: `aws lambda create-function \
+    --function-name process_trip_begin \
+    --runtime python3.11 \
+    --role arn:aws:iam::your-account-id:role/LambdaExecutionRole \
+    --handler process_trip_begin.lambda_handler \
+    --zip-file fileb://process_trip_begin.zip \
+    --region eu-north-1`
+  - Repeat for `process_trip_finish` and `match_and_complete`, adding Kinesis and DynamoDB Stream triggers.
+
+- **Glue Job**:
+  - Upload `GenerateTripMetrics.py` to `s3://nsp-bolt-trip-analytics/scripts/`.
+  - Create job: AWS Glue Console > Jobs > Add Job, name `GenerateTripMetrics`, role `GlueTripRole`, script location `s3://nsp-bolt-trip-analytics/scripts/GenerateTripMetrics.py`.
+
+- **EventBridge Trigger**:
+  - `aws events put-rule --name RunGenerateTripMetricsDaily --schedule-expression "cron(0 1 * * ? *)" --region eu-north-1`.
+  - `aws events put-targets --rule RunGenerateTripMetricsDaily --targets "Id"="1","Arn"="arn:aws:glue:eu-north-1:your-account-id:job/GenerateTripMetrics"`.
+
+### Verification Steps
+- Run `python send_to_kinesis.py` with test data.
+- Check `TripData` for `RAW#` and `COMPLETED#` records.
+- Manually trigger `GenerateTripMetrics` and verify S3 output at `s3://nsp-bolt-trip-analytics/metrics/2025/07/12/`.
+- Monitor CloudWatch logs for errors.
+
+## Contributing
+Suggest enhancements (e.g., a dashboard, retry queue). Submit issues or pull requests with detailed descriptions.
