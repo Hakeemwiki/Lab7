@@ -54,8 +54,7 @@ The ride-sharing platform faces the challenge of efficiently processing and anal
 Manual data processing is impractical due to its time-intensive nature and susceptibility to errors, delaying critical insights. This pipeline automates ingestion, processing, and KPI generation, enabling real-time monitoring, historical analysis, and data-driven decision-making.
 
 **[Architecture Diagram]**  
-
-![alt text](docs/lab7.drawio.svg)
+![alt text](docs/lab7.drawio2.svg)
 
 ## Architecture
 ### Components
