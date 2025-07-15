@@ -70,9 +70,6 @@ Manual data processing is impractical due to its time-intensive nature and susce
 ### Data Flow
 Data flows from CSV files ingested by `send_to_kinesis.py` into Kinesis, processed by Lambda functions, stored in DynamoDB, aggregated by the Glue job, and saved to S3.
 
-**[INSERT IMAGE: Data Flow Diagram]**  
-*(Placeholder for a detailed data flow chart showing CSV -> Kinesis -> Lambda -> DynamoDB -> Glue -> S3.)*
-
 ## Data Format and Sample Schema
 ### Input Data
 - **Files**: CSV files `trip_start.csv` and `trip_end.csv` in a local `data/` directory.
@@ -145,9 +142,6 @@ To enable flexible analysis of KPIs, AWS Glue crawlers have been configured to c
 - `GenerateTripMetrics` Glue job scans `COMPLETED#` records, computes KPIs, and uploads to S3.
 - EventBridge schedules the job daily at 1:00 AM GMT.
 ![alt text](docs/EventBridgeScheduler.png)
-
-**[INSERT IMAGE: Workflow Diagram]**  
-*(Placeholder for a flowchart detailing ingestion, processing, and aggregation phases.)*
 
 ## Error-Handling, Retry, and Logging Logic
 ### Error Handling
